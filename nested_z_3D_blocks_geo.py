@@ -13,22 +13,29 @@ class Params:
     h_in: float = 0.15      
     Lx: float = 10.0
     Ly: float = 5.0
+
+    # Mesh elements
     ny: int = 25            # verticals AND diagonals
-    nz_mid: int = 5         # inner bottom/top AND outer top
+    nz_mid: int = 4         # inner bottom/top AND outer top
     nz_left_right: int = 9 # outer left/right horizontals
-    Ny: int = 10
-    Nx: int = 15
-    Nwake: int = 20
+    upper_surface: int = 400
+    lower_surface: int = 50
+    nose_surface: int = 50
+    
+    # Wake params
+    Ny_outer: int = 7
+    Nx_far_wake: int = 15
+    Nx_near_wake: int = 40
+    near_wake_length: float = 0.02
 
     # Grading
+    nose_bump_coeff: float = 5.0
     y_progression: float = 1.15
-    y_outer_vertical_progression: float = 1.5
+    y_outer_vertical_progression: float = 1.75
     y_outer_horizontal_progression: float = 1.5
-    y_wake_length: float = 0.015
 
-    upper_surface: int = 250
-    lower_surface: int = 50
-    nose_surface: int = 40
+    # Airfoil params to create splines 
+    x_th: float = 0.07
     c: float = 1.0
     Nu: int = 200
     Nl: int = 200
@@ -36,8 +43,10 @@ class Params:
     def __init__(self):
         """Initialize and compute uniform Z segments"""
         self.w_in, self.z1, self.z2, self.dz = self.uniform_z_segments()
-        self.outer_veritcal_ele, self.outer_vertical_heights = self.create_geometric_grading(self.Ny,self.y_outer_vertical_progression,None,1)
-        self.outer_horizontal_ele, self.outer_horizontal_heigths = self.create_geometric_grading(self.Nx,self.y_outer_horizontal_progression,0.015,self.Nwake)
+
+        # Wake params
+        self.outer_veritcal_ele, self.outer_vertical_heights = self.create_geometric_grading(self.Ny_outer,self.y_outer_vertical_progression,None,1)
+        self.outer_horizontal_ele, self.outer_horizontal_heigths = self.create_geometric_grading(self.Nx_far_wake,self.y_outer_horizontal_progression,self.near_wake_length,self.Nx_near_wake)
     @staticmethod
     def create_geometric_grading(n_elements, progression, first_layer_height=None, first_layer_count=1, normalize=True):
         """
@@ -353,7 +362,7 @@ def nearest_station_from_lower(xl, yl, x_target):
     i = min(range(len(xl)), key=lambda k: abs(xl[k] - x_target))
     return i, xl[i], yl[i]
 
-def build_three_airfoil_splines(xu, yu, xl, yl, p: Params, x_th=0.1, make_wire=True):
+def build_three_airfoil_splines(xu, yu, xl, yl, p: Params, make_wire=True):
     """
     Build three splines by filtering points around a threshold x_th (no interpolation).
 
@@ -386,7 +395,7 @@ def build_three_airfoil_splines(xu, yu, xl, yl, p: Params, x_th=0.1, make_wire=T
         lower_pts_tags[i] = gmsh.model.geo.addPoint(xl[i] * p.c, yl[i] * p.c, 0.0)
 
     # Choose a single cut X from the upper samples (nearest to x_th)
-    iU_cut, x_cut, yU_cut = nearest_station_from_upper(xu, yu, x_th)
+    iU_cut, x_cut, yU_cut = nearest_station_from_upper(xu, yu, p.x_th)
     # Clamp to internal range for upper
     pt_Ucut_index = max(1, min(nU - 2, iU_cut))
 
@@ -439,7 +448,7 @@ def build_three_airfoil_splines(xu, yu, xl, yl, p: Params, x_th=0.1, make_wire=T
     curve_lower_far = gmsh.model.geo.addSpline(lower_far_pts)
     gmsh.model.geo.synchronize()
     gmsh.model.geo.mesh.setTransfiniteCurve(curve_upper_far,p.upper_surface)
-    gmsh.model.geo.mesh.setTransfiniteCurve(curve_nose,p.nose_surface)
+    gmsh.model.geo.mesh.setTransfiniteCurve(curve_nose,p.nose_surface,"Bump",p.nose_bump_coeff)
     gmsh.model.geo.mesh.setTransfiniteCurve(curve_lower_far,p.lower_surface)
 
     return curve_upper_far, curve_nose, curve_lower_far, [pt_TE, upper_far_pts[-1], pt_LE, nose_pts[-1]]
@@ -583,7 +592,7 @@ xL_cos = cosine_spacing(p.Nl + 1, 0.0, 1.0)
 xu, yu, _, _ = naca4412(xU_cos)
 _, _, xl, yl = naca4412(xL_cos)
 
-left_airfoil_curve_upper, left_airfoil_curve_nose, left_airfoil_curve_lower, airfoil_split_tags = build_three_airfoil_splines(xu, yu, xl, yl, p, x_th=0.1, make_wire=False)
+left_airfoil_curve_upper, left_airfoil_curve_nose, left_airfoil_curve_lower, airfoil_split_tags = build_three_airfoil_splines(xu, yu, xl, yl, p, make_wire=False)
 
 gmsh.model.geo.synchronize()
 
