@@ -20,19 +20,21 @@ class Params:
     nz_left_right: int = 9 # outer left/right horizontals
     upper_surface: int = 400
     lower_surface: int = 50
-    nose_surface: int = 50
+    nose_surface: int = 100
     
     # Wake params
-    Ny_outer: int = 7
-    Nx_far_wake: int = 15
+    Ny_outer: int = 15
+    Nx_far_wake: int = 20
     Nx_near_wake: int = 40
     near_wake_length: float = 0.02
+    wake_stretch_in_Y: float = 2.0
+    near_wake_offset_in_x: float = 1.0
 
     # Grading
-    nose_bump_coeff: float = 5.0
+    nose_bump_coeff: float = 2.5
     y_progression: float = 1.15
-    y_outer_vertical_progression: float = 1.75
-    y_outer_horizontal_progression: float = 1.5
+    y_outer_vertical_progression: float = 1.15
+    y_outer_horizontal_progression: float = 1.15
 
     # Airfoil params to create splines 
     x_th: float = 0.07
@@ -582,6 +584,83 @@ def assign_surfaces_to_physical_groups(p, outer_C_surf_tag, eps=1e-6):
     
     gmsh.model.geo.synchronize()
 
+def create_volume_from_nested_pairs(left_surf_tags, right_surf_tags, left_pt_tags, rigt_pt_tags,
+                                    translate, num_ele, coeff=1,oriented_down=False):
+    """
+    Build connector lines, patch surfaces and volume between a 'left' set (TE_upper)
+    and a 'right' set (wake_upper). If 'translate' != 0, top and inner patches are created
+    as 'filling' to better accommodate deformation.
+
+    Args:
+      left_surf_tags:    list of left surface tags (TE side)
+      right_surf_tags:   list of right surface tags (wake side) or None to auto-build
+      left_pt_tags:      list of left boundary point tags
+      rigt_pt_tags:      list of right boundary point tags or None to auto-build
+      translate:         float, Y-translation applied to the 'top' right surface (index 3)
+      num_ele:           int, transfinite subdivision on connector lines
+      coeff:             float, scale factor applied to 'translate'
+
+    Returns:
+      dict with volume_tag and created patch tags.
+    """
+
+    # Use generic names internally
+    leftSurfaces = left_surf_tags
+    leftPoints   = left_pt_tags
+
+    rightSurfaces = right_surf_tags
+    rightPoints   = rigt_pt_tags
+
+    # Optional: translate the "top" right surface (index 3) in Y
+    if translate:
+        pts_to_translate = gmsh.model.getBoundary([(2, rightSurfaces[3])], recursive=True)
+        gmsh.model.geo.translate(pts_to_translate, 0, translate, 0)
+        gmsh.model.geo.synchronize()
+    
+    # Connector lines (left -> right) with transfinite constraints
+    idxs = [2, 3, 6, 7] if oriented_down else range(len(rightPoints))
+    for i in idxs:
+        line = gmsh.model.geo.addLine(leftPoints[i], rightPoints[i])
+        # If you want biased spacing, use "Progression"; otherwise omit meshType/coef
+        gmsh.model.geo.mesh.setTransfiniteCurve(line, num_ele, meshType="Progression", coef=coeff)
+
+    gmsh.model.geo.synchronize()
+
+    # Patch surfaces (exact index pattern preserved)
+    _ = create_surface_from_points([leftPoints[0], rightPoints[0], rightPoints[3], leftPoints[3]])
+    _ = create_surface_from_points([leftPoints[4], rightPoints[4], rightPoints[7], leftPoints[7]])
+    _ = create_surface_from_points([leftPoints[5], rightPoints[5], rightPoints[6], leftPoints[6]])
+    _ = create_surface_from_points([leftPoints[1], rightPoints[1], rightPoints[2], leftPoints[2]])
+
+    if oriented_down == False:
+        _ = create_surface_from_points([leftPoints[0], rightPoints[0], rightPoints[4], leftPoints[4]])
+        _ = create_surface_from_points([leftPoints[4], rightPoints[4], rightPoints[5], leftPoints[5]])
+        _ = create_surface_from_points([leftPoints[5], rightPoints[5], rightPoints[1], leftPoints[1]])
+
+    # Top and inner patches: 'filling' iff a translation is applied
+    topSurf = create_surface_from_points([leftPoints[3], rightPoints[3], rightPoints[2], leftPoints[2]],
+                                        surface_type=("filling" if translate else "plane"))
+    innerSurf = create_surface_from_points([leftPoints[7], rightPoints[7], rightPoints[6], leftPoints[6]],
+                                        surface_type=("filling" if translate else "plane"))
+
+    # Corner/angle patches (always 'filling')
+    leftCornerSurf  = create_surface_from_points([leftPoints[3], rightPoints[3], rightPoints[7], leftPoints[7]],
+                                                 surface_type="filling")
+    rightCornerSurf = create_surface_from_points([leftPoints[6], rightPoints[6], rightPoints[2], leftPoints[2]],
+                                                 surface_type="filling")
+
+    gmsh.model.geo.synchronize()
+
+    # Create volumes between the left and right surface sets
+    volume_tag = create_volumes_from_surface_pairs(leftSurfaces, rightSurfaces)
+    return volume_tag, topSurf
+
+def copy_upper_to_lower(upper, lower,idxs=(0, 1, 4, 5)):
+    for i in idxs:
+        lower[i] = upper[i]
+    return lower, upper
+
+
 gmsh.initialize()
 gmsh.model.add("nested_at_x")
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -596,15 +675,11 @@ left_airfoil_curve_upper, left_airfoil_curve_nose, left_airfoil_curve_lower, air
 
 gmsh.model.geo.synchronize()
 
-surface_tags_10c_upper, curve_tags_10c_upper, pts_tags_10c_upper = nested_mesh_yz_transfinite_at_x(p,airfoil_split_tags[1],orientation_down=0)
-surface_tags_10c_lower, curve_tags_10c_lower, pts_tags_10c_lower = nested_mesh_yz_transfinite_at_x(p,airfoil_split_tags[3],orientation_down=1)
-surface_tags_TE_upper,  curve_tags_TE_upper, pts_tags_TE_upper = nested_mesh_yz_transfinite_at_x(p,airfoil_split_tags[0],orientation_down=0)
-surface_tags_TE_lower,  curve_tags_TE_lower, pts_tags_TE_lower = nested_mesh_yz_transfinite_at_x(p,airfoil_split_tags[0],orientation_down=1)
-
-
 # -----------------------------------------------------------------------
 # C nested
 # -----------------------------------------------------------------------
+surface_tags_10c_upper, curve_tags_10c_upper, pts_tags_10c_upper = nested_mesh_yz_transfinite_at_x(p,airfoil_split_tags[1],orientation_down=0)
+surface_tags_10c_lower, curve_tags_10c_lower, pts_tags_10c_lower = nested_mesh_yz_transfinite_at_x(p,airfoil_split_tags[3],orientation_down=1)
 
 airfoil_split_upper = _pt_xyz(pts_tags_10c_upper[3])
 airfoil_split_lower = _pt_xyz(pts_tags_10c_lower[3])
@@ -687,6 +762,8 @@ volume_tags_C_nested = create_volumes_from_surface_pairs(surface_tags_10c_upper,
 # Top nested
 # -----------------------------------------------------------------------
 
+surface_tags_TE_upper,  curve_tags_TE_upper, pts_tags_TE_upper = nested_mesh_yz_transfinite_at_x(p,airfoil_split_tags[0],orientation_down=0)
+
 upper_line_1 = gmsh.model.geo.addLine(pts_tags_10c_upper[3],pts_tags_TE_upper[3])
 gmsh.model.geo.synchronize()
 gmsh.model.geo.mesh.setTransfiniteCurve(upper_line_1,p.upper_surface)
@@ -736,6 +813,8 @@ volume_tags_upper_nested = create_volumes_from_surface_pairs(surface_tags_10c_up
 # Bottom nested
 # -----------------------------------------------------------------------
 
+surface_tags_TE_lower,  curve_tags_TE_lower, pts_tags_TE_lower = nested_mesh_yz_transfinite_at_x(p,airfoil_split_tags[0],orientation_down=1)
+
 lower_line_1 = gmsh.model.geo.addLine(pts_tags_10c_lower[3],pts_tags_TE_lower[3])
 gmsh.model.geo.synchronize()
 gmsh.model.geo.mesh.setTransfiniteCurve(lower_line_1,p.lower_surface)
@@ -782,38 +861,372 @@ lower_right_angle_surf = create_surface_from_points([pts_tags_10c_lower[6],pts_t
 volume_tags_lower_nested = create_volumes_from_surface_pairs(surface_tags_10c_lower, surface_tags_TE_lower)
 
 # -----------------------------------------------------------------------
-# Outer domain
+# Outer domain via extrusion
 # -----------------------------------------------------------------------
 
-outer_top = gmsh.model.geo.extrude([(2,upper_top_surf)],0.0,p.Ly-p.H,0.0,numElements=p.outer_veritcal_ele,heights=p.outer_vertical_heights,recombine=True)
-outer_bottom = gmsh.model.geo.extrude([(2,lower_top_surf)],0.0,-p.Ly+p.H,0.0,numElements=p.outer_veritcal_ele,heights=p.outer_vertical_heights,recombine=True)
+# outer_top = gmsh.model.geo.extrude([(2,upper_top_surf)],0.0,p.Ly-p.H,0.0,numElements=p.outer_veritcal_ele,heights=p.outer_vertical_heights,recombine=True)
+# outer_bottom = gmsh.model.geo.extrude([(2,lower_top_surf)],0.0,-p.Ly+p.H,0.0,numElements=p.outer_veritcal_ele,heights=p.outer_vertical_heights,recombine=True)
+# gmsh.model.geo.synchronize()
+# gmsh.model.geo.extrude([outer_top[3]],p.Lx-p.c,0.0,0.0,numElements=p.outer_horizontal_ele,heights=p.outer_horizontal_heigths,recombine=True)
+# gmsh.model.geo.extrude([outer_bottom[3]],p.Lx-p.c,0.0,0.0,numElements=p.outer_horizontal_ele,heights=p.outer_horizontal_heigths,recombine=True)
+# gmsh.model.geo.extrude([(2, surf) for surf in surface_tags_TE_upper],p.Lx-p.c,0.0,0.0,numElements=p.outer_horizontal_ele,heights=p.outer_horizontal_heigths,recombine=True)
+# gmsh.model.geo.extrude([(2, surf) for surf in surface_tags_TE_lower],p.Lx-p.c,0.0,0.0,numElements=p.outer_horizontal_ele,heights=p.outer_horizontal_heigths,recombine=True)
+
+# all_surfaces = gmsh.model.getEntities(2)
+# for dim,tag in all_surfaces:
+#     gmsh.model.geo.mesh.setTransfiniteSurface(tag)
+#     gmsh.model.geo.mesh.setRecombine(2,tag,90)
+
+# # corners = get_surface_corners(outer_top[-1][1])
+# inlet_C_upper_tags = gmsh.model.getBoundary([outer_top[-1]],recursive=True)[-2:]
+# inlet_C_lower_tags = gmsh.model.getBoundary([outer_bottom[-1]],recursive=True)[-2:]
+
+# inlet_c_left = gmsh.model.geo.addCircleArc(inlet_C_upper_tags[0][1],arc_ceter_pt_tag_1,inlet_C_lower_tags[0][1])
+# inlet_c_right = gmsh.model.geo.addCircleArc(inlet_C_upper_tags[1][1],arc_ceter_pt_tag_4,inlet_C_lower_tags[1][1])
+
+# gmsh.model.geo.synchronize()
+# gmsh.model.geo.mesh.setTransfiniteCurve(inlet_c_left,p.nose_surface)
+# gmsh.model.geo.mesh.setTransfiniteCurve(inlet_c_right,p.nose_surface)
+# inlet_c_surf = create_surface_from_points([inlet_C_upper_tags[0][1],inlet_C_lower_tags[0][1],inlet_C_lower_tags[1][1],inlet_C_upper_tags[1][1]],surface_type="filling")
+# inlet_c_left_surf = create_surface_from_points([inlet_C_upper_tags[0][1],inlet_C_lower_tags[0][1],pts_tags_10c_lower[3],pts_tags_10c_upper[3]])
+# inlet_c_right_surf = create_surface_from_points([inlet_C_upper_tags[1][1],inlet_C_lower_tags[1][1],pts_tags_10c_lower[2],pts_tags_10c_upper[2]])
+
+# volume_tags_C_inlet = create_volumes_from_surface_pairs([outer_top[-1][1]],[outer_bottom[-1][1]])
+# gmsh.model.geo.synchronize()
+# gmsh.model.geo.removeAllDuplicates()
+
+# -----------------------------------------------------------------------
+# Outer domain Wake
+# -----------------------------------------------------------------------
+
+wake_pt_tag = gmsh.model.geo.addPoint(p.c + (p.Lx-p.c)*p.near_wake_length,0,0)
 gmsh.model.geo.synchronize()
-gmsh.model.geo.extrude([outer_top[3]],p.Lx-p.c,0.0,0.0,numElements=p.outer_horizontal_ele,heights=p.outer_horizontal_heigths,recombine=True)
-gmsh.model.geo.extrude([outer_bottom[3]],p.Lx-p.c,0.0,0.0,numElements=p.outer_horizontal_ele,heights=p.outer_horizontal_heigths,recombine=True)
-gmsh.model.geo.extrude([(2, surf) for surf in surface_tags_TE_upper],p.Lx-p.c,0.0,0.0,numElements=p.outer_horizontal_ele,heights=p.outer_horizontal_heigths,recombine=True)
-gmsh.model.geo.extrude([(2, surf) for surf in surface_tags_TE_lower],p.Lx-p.c,0.0,0.0,numElements=p.outer_horizontal_ele,heights=p.outer_horizontal_heigths,recombine=True)
+surface_tags_wake_upper,  curve_tags_wake_upper, pts_tags_wake_upper = nested_mesh_yz_transfinite_at_x(p,wake_pt_tag,orientation_down=0)
+_, near_wake_top_surf = create_volume_from_nested_pairs(surface_tags_TE_upper,surface_tags_wake_upper,pts_tags_TE_upper,pts_tags_wake_upper,0,p.Nx_near_wake)
 
-all_surfaces = gmsh.model.getEntities(2)
-for dim,tag in all_surfaces:
-    gmsh.model.geo.mesh.setTransfiniteSurface(tag)
-    gmsh.model.geo.mesh.setRecombine(2,tag,90)
+surface_tags_wake_lower,  curve_tags_wake_lower, pts_tags_wake_lower = nested_mesh_yz_transfinite_at_x(p,wake_pt_tag,orientation_down=1)
+gmsh.model.geo.removeAllDuplicates()
+gmsh.model.geo.synchronize()
 
-# corners = get_surface_corners(outer_top[-1][1])
-inlet_C_upper_tags = gmsh.model.getBoundary([outer_top[-1]],recursive=True)[-2:]
-inlet_C_lower_tags = gmsh.model.getBoundary([outer_bottom[-1]],recursive=True)[-2:]
+copy_upper_to_lower(pts_tags_wake_upper, pts_tags_wake_lower)
+copy_upper_to_lower( pts_tags_TE_upper,   pts_tags_TE_lower)
+_ ,near_wake_bottom_surf = create_volume_from_nested_pairs(surface_tags_TE_lower,surface_tags_wake_lower,pts_tags_TE_lower,pts_tags_wake_lower,0,p.Nx_near_wake,oriented_down=True)
 
-inlet_c_left = gmsh.model.geo.addCircleArc(inlet_C_upper_tags[0][1],arc_ceter_pt_tag_1,inlet_C_lower_tags[0][1])
-inlet_c_right = gmsh.model.geo.addCircleArc(inlet_C_upper_tags[1][1],arc_ceter_pt_tag_4,inlet_C_lower_tags[1][1])
+far_wake_pt_tag = gmsh.model.geo.addPoint(p.Lx,0,0)
+gmsh.model.geo.synchronize()
+
+surface_tags_far_wake_upper,  curve_tags_far_wake_upper, pts_tags_far_wake_upper = nested_mesh_yz_transfinite_at_x(p,far_wake_pt_tag,orientation_down=0)
+_, far_wake_top_surf = create_volume_from_nested_pairs(surface_tags_wake_upper,surface_tags_far_wake_upper,pts_tags_wake_upper,pts_tags_far_wake_upper,p.wake_stretch_in_Y,p.Nx_far_wake,p.y_outer_horizontal_progression)
+
+surface_tags_far_wake_lower,  curve_tags_far_wake_lower, pts_tags_far_wake_lower = nested_mesh_yz_transfinite_at_x(p,far_wake_pt_tag,orientation_down=1)
+gmsh.model.geo.removeAllDuplicates()
+gmsh.model.geo.synchronize()
+copy_upper_to_lower(pts_tags_far_wake_upper, pts_tags_far_wake_lower)
+
+_, far_wake_bottom_surf = create_volume_from_nested_pairs(surface_tags_wake_lower,surface_tags_far_wake_lower,pts_tags_wake_lower,pts_tags_far_wake_lower,-p.wake_stretch_in_Y,p.Nx_far_wake,p.y_outer_horizontal_progression,oriented_down=True)
+
+# -----------------------------------------------------------------------
+# Outer domain top
+# -----------------------------------------------------------------------
+
+outer_top_0 = gmsh.model.geo.addPoint(0,p.Ly,0)
+outer_top_1 = gmsh.model.geo.addPoint(p.c,p.Ly,0)
+outer_top_2 = gmsh.model.geo.addPoint(p.c,p.Ly,p.W)
+outer_top_3 = gmsh.model.geo.addPoint(0,p.Ly,p.W)
+L1 = gmsh.model.geo.addLine(outer_top_0, outer_top_1)
+gmsh.model.geo.mesh.setTransfiniteCurve(L1,nPoints=p.upper_surface)
+L2 = gmsh.model.geo.addLine(outer_top_1, outer_top_2)
+gmsh.model.geo.mesh.setTransfiniteCurve(L2,nPoints=p.nz_mid)
+L3 = gmsh.model.geo.addLine(outer_top_2, outer_top_3)
+gmsh.model.geo.mesh.setTransfiniteCurve(L3,nPoints=p.upper_surface)
+L4 = gmsh.model.geo.addLine(outer_top_3, outer_top_0)
+gmsh.model.geo.mesh.setTransfiniteCurve(L4,nPoints=p.nz_mid)
+gmsh.model.geo.synchronize()
+
+upper_top_surf_pts = gmsh.model.getBoundary([(2, upper_top_surf)], oriented=False, recursive=True)
+upper_top_surf_pts = [tag for dim, tag in upper_top_surf_pts]
+
+
+line = gmsh.model.geo.addLine(upper_top_surf_pts[0],outer_top_3 )
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[1],outer_top_0)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[2],outer_top_2)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[3],outer_top_1)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+outer_top_surf = create_surface_from_points([outer_top_0,outer_top_1,outer_top_2,outer_top_3])
+inlet_circ_top_face = create_surface_from_points([outer_top_0,outer_top_3,upper_top_surf_pts[0],upper_top_surf_pts[1]],surface_type="filling")
+_ = create_surface_from_points([outer_top_3,outer_top_2,upper_top_surf_pts[2],upper_top_surf_pts[0]])
+_ = create_surface_from_points([outer_top_2,outer_top_1,upper_top_surf_pts[3],upper_top_surf_pts[2]])
+_ = create_surface_from_points([outer_top_1,outer_top_0,upper_top_surf_pts[1],upper_top_surf_pts[3]])
+
+_ = create_volumes_from_surface_pairs([outer_top_surf],[upper_top_surf])
+gmsh.model.geo.synchronize()
+
+# -----------------------------------------------------------------------
+# Outer domain bottom
+# -----------------------------------------------------------------------
+
+outer_bot_0  = gmsh.model.geo.addPoint(0,   -p.Ly, 0)
+outer_bot_1  = gmsh.model.geo.addPoint(p.c, -p.Ly, 0)
+outer_bot_2 = gmsh.model.geo.addPoint(p.c, -p.Ly, p.W)
+outer_bot_3 = gmsh.model.geo.addPoint(0,   -p.Ly, p.W)
+
+B1 = gmsh.model.geo.addLine(outer_bot_0,  outer_bot_1)
+gmsh.model.geo.mesh.setTransfiniteCurve(B1, nPoints=p.lower_surface)
+B2 = gmsh.model.geo.addLine(outer_bot_1,  outer_bot_2)
+gmsh.model.geo.mesh.setTransfiniteCurve(B2, nPoints=p.nz_mid)
+B3 = gmsh.model.geo.addLine(outer_bot_2, outer_bot_3)
+gmsh.model.geo.mesh.setTransfiniteCurve(B3, nPoints=p.lower_surface)
+B4 = gmsh.model.geo.addLine(outer_bot_3, outer_bot_0)
+gmsh.model.geo.mesh.setTransfiniteCurve(B4, nPoints=p.nz_mid)
+
+lower_top_surf_pts = gmsh.model.getBoundary([(2, lower_top_surf)], oriented=False, recursive=True)
+lower_top_surf_pts = [tag for dim, tag in lower_top_surf_pts]
+
+line = gmsh.model.geo.addLine(lower_top_surf_pts[0],outer_bot_3 )
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(lower_top_surf_pts[1],outer_bot_0)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(lower_top_surf_pts[2],outer_bot_2)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(lower_top_surf_pts[3],outer_bot_1)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+bottom_top_surf = create_surface_from_points([outer_bot_0,outer_bot_1,outer_bot_2,outer_bot_3])
+inlet_circ_bot_face = create_surface_from_points([outer_bot_0,outer_bot_3,lower_top_surf_pts[0],lower_top_surf_pts[1]],surface_type="filling")
+_ = create_surface_from_points([outer_bot_3,outer_bot_2,lower_top_surf_pts[2],lower_top_surf_pts[0]])
+_ = create_surface_from_points([outer_bot_2,outer_bot_1,lower_top_surf_pts[3],lower_top_surf_pts[2]])
+_ = create_surface_from_points([outer_bot_1,outer_bot_0,lower_top_surf_pts[1],lower_top_surf_pts[3]])
+
+_ = create_volumes_from_surface_pairs([bottom_top_surf],[lower_top_surf])
+gmsh.model.geo.synchronize()
+
+# -----------------------------------------------------------------------
+# Outer domain C Inlet
+# -----------------------------------------------------------------------
+
+inlet_C_upper_tags = [outer_top_0,outer_top_3]
+inlet_C_lower_tags = [outer_bot_0,outer_bot_3]
+LE_tag_left = airfoil_split_tags[2]
+LE_tag_right = gmsh.model.geo.addPoint(0,0,p.W)
+inlet_c_left = gmsh.model.geo.addCircleArc(inlet_C_upper_tags[0],LE_tag_left,inlet_C_lower_tags[0])
+inlet_c_right = gmsh.model.geo.addCircleArc(inlet_C_upper_tags[1],LE_tag_right,inlet_C_lower_tags[1])
+
 gmsh.model.geo.synchronize()
 gmsh.model.geo.mesh.setTransfiniteCurve(inlet_c_left,p.nose_surface)
 gmsh.model.geo.mesh.setTransfiniteCurve(inlet_c_right,p.nose_surface)
-inlet_c_surf = create_surface_from_points([inlet_C_upper_tags[0][1],inlet_C_lower_tags[0][1],inlet_C_lower_tags[1][1],inlet_C_upper_tags[1][1]],surface_type="filling")
-inlet_c_left_surf = create_surface_from_points([inlet_C_upper_tags[0][1],inlet_C_lower_tags[0][1],pts_tags_10c_lower[3],pts_tags_10c_upper[3]])
-inlet_c_right_surf = create_surface_from_points([inlet_C_upper_tags[1][1],inlet_C_lower_tags[1][1],pts_tags_10c_lower[2],pts_tags_10c_upper[2]])
+inlet_c_surf = create_surface_from_points([inlet_C_upper_tags[0],inlet_C_lower_tags[0],inlet_C_lower_tags[1],inlet_C_upper_tags[1]],surface_type="filling")
+inlet_c_left_surf = create_surface_from_points([inlet_C_upper_tags[0],inlet_C_lower_tags[0],pts_tags_10c_lower[3],pts_tags_10c_upper[3]])
+inlet_c_right_surf = create_surface_from_points([inlet_C_upper_tags[1],inlet_C_lower_tags[1],pts_tags_10c_lower[2],pts_tags_10c_upper[2]])
 
-volume_tags_C_inlet = create_volumes_from_surface_pairs([outer_top[-1][1]],[outer_bottom[-1][1]])
+volume_tags_C_inlet = create_volumes_from_surface_pairs([inlet_circ_top_face],[inlet_circ_bot_face])
 gmsh.model.geo.synchronize()
 gmsh.model.geo.removeAllDuplicates()
+
+# -----------------------------------------------------------------------
+# Top near wake
+# -----------------------------------------------------------------------
+
+outer_top_near_wake_0 = outer_top_1
+outer_top_near_wake_1 = gmsh.model.geo.addPoint(p.c + (p.Lx-p.c)*p.near_wake_length + p.near_wake_offset_in_x,p.Ly,0)
+outer_top_near_wake_2 = gmsh.model.geo.addPoint(p.c + (p.Lx-p.c)*p.near_wake_length + p.near_wake_offset_in_x,p.Ly,p.W)
+outer_top_near_wake_3 = outer_top_2
+L1 = gmsh.model.geo.addLine(outer_top_near_wake_0, outer_top_near_wake_1)
+gmsh.model.geo.mesh.setTransfiniteCurve(L1,nPoints=p.Nx_near_wake)
+L2 = gmsh.model.geo.addLine(outer_top_near_wake_1, outer_top_near_wake_2)
+gmsh.model.geo.mesh.setTransfiniteCurve(L2,nPoints=p.nz_mid)
+L3 = gmsh.model.geo.addLine(outer_top_near_wake_2, outer_top_near_wake_3)
+gmsh.model.geo.mesh.setTransfiniteCurve(L3,nPoints=p.Nx_near_wake)
+L4 = gmsh.model.geo.addLine(outer_top_near_wake_3, outer_top_near_wake_0)
+gmsh.model.geo.mesh.setTransfiniteCurve(L4,nPoints=p.nz_mid)
+gmsh.model.geo.synchronize()
+
+upper_top_surf_pts = gmsh.model.getBoundary([(2, near_wake_top_surf)], oriented=False, recursive=True)
+upper_top_surf_pts = [tag for dim, tag in upper_top_surf_pts]
+
+
+line = gmsh.model.geo.addLine(upper_top_surf_pts[0],outer_top_near_wake_3 )
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[1],outer_top_near_wake_0)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[2],outer_top_near_wake_2)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[3],outer_top_near_wake_1)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+outer_top_surf = create_surface_from_points([outer_top_near_wake_0,outer_top_near_wake_1,outer_top_near_wake_2,outer_top_near_wake_3])
+# _ = create_surface_from_points([outer_top_near_wake_0,outer_top_near_wake_3,upper_top_surf_pts[0],upper_top_surf_pts[1]])
+_ = create_surface_from_points([outer_top_near_wake_3,outer_top_near_wake_2,upper_top_surf_pts[2],upper_top_surf_pts[0]])
+_ = create_surface_from_points([outer_top_near_wake_2,outer_top_near_wake_1,upper_top_surf_pts[3],upper_top_surf_pts[2]], surface_type="filling")
+_ = create_surface_from_points([outer_top_near_wake_1,outer_top_near_wake_0,upper_top_surf_pts[1],upper_top_surf_pts[3]])
+
+_ = create_volumes_from_surface_pairs([outer_top_surf],[near_wake_top_surf])
+gmsh.model.geo.synchronize()
+
+# -----------------------------------------------------------------------
+# Bottom near wake
+# -----------------------------------------------------------------------
+
+outer_bot_near_wake_0 = outer_bot_1
+outer_bot_near_wake_1 = gmsh.model.geo.addPoint(p.c + (p.Lx-p.c)*p.near_wake_length + p.near_wake_offset_in_x,-p.Ly,0)
+outer_bot_near_wake_2 = gmsh.model.geo.addPoint(p.c + (p.Lx-p.c)*p.near_wake_length + p.near_wake_offset_in_x,-p.Ly,p.W)
+outer_bot_near_wake_3 = outer_bot_2
+L1 = gmsh.model.geo.addLine(outer_bot_near_wake_0, outer_bot_near_wake_1)
+gmsh.model.geo.mesh.setTransfiniteCurve(L1,nPoints=p.Nx_near_wake)
+L2 = gmsh.model.geo.addLine(outer_bot_near_wake_1, outer_bot_near_wake_2)
+gmsh.model.geo.mesh.setTransfiniteCurve(L2,nPoints=p.nz_mid)
+L3 = gmsh.model.geo.addLine(outer_bot_near_wake_2, outer_bot_near_wake_3)
+gmsh.model.geo.mesh.setTransfiniteCurve(L3,nPoints=p.Nx_near_wake)
+L4 = gmsh.model.geo.addLine(outer_bot_near_wake_3, outer_bot_near_wake_0)
+gmsh.model.geo.mesh.setTransfiniteCurve(L4,nPoints=p.nz_mid)
+gmsh.model.geo.synchronize()
+
+upper_top_surf_pts = gmsh.model.getBoundary([(2, near_wake_bottom_surf)], oriented=False, recursive=True)
+upper_top_surf_pts = [tag for dim, tag in upper_top_surf_pts]
+
+
+line = gmsh.model.geo.addLine(upper_top_surf_pts[0],outer_bot_near_wake_3 )
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[1],outer_bot_near_wake_0)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[2],outer_bot_near_wake_2)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[3],outer_bot_near_wake_1)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+outer_top_surf = create_surface_from_points([outer_bot_near_wake_0,outer_bot_near_wake_1,outer_bot_near_wake_2,outer_bot_near_wake_3])
+# _ = create_surface_from_points([outer_bot_near_wake_0,outer_bot_near_wake_3,upper_top_surf_pts[0],upper_top_surf_pts[1]])
+_ = create_surface_from_points([outer_bot_near_wake_3,outer_bot_near_wake_2,upper_top_surf_pts[2],upper_top_surf_pts[0]])
+_ = create_surface_from_points([outer_bot_near_wake_2,outer_bot_near_wake_1,upper_top_surf_pts[3],upper_top_surf_pts[2]], surface_type="filling")
+_ = create_surface_from_points([outer_bot_near_wake_1,outer_bot_near_wake_0,upper_top_surf_pts[1],upper_top_surf_pts[3]])
+
+_ = create_volumes_from_surface_pairs([outer_top_surf],[near_wake_bottom_surf])
+gmsh.model.geo.synchronize()
+
+# -----------------------------------------------------------------------
+# Top far wake
+# -----------------------------------------------------------------------
+
+outer_top_far_wake_0 = outer_top_near_wake_1
+outer_top_far_wake_1 = gmsh.model.geo.addPoint(p.Lx,p.Ly,0)
+outer_top_far_wake_2 = gmsh.model.geo.addPoint(p.Lx,p.Ly,p.W)
+outer_top_far_wake_3 = outer_top_near_wake_2
+L1 = gmsh.model.geo.addLine(outer_top_far_wake_0, outer_top_far_wake_1)
+gmsh.model.geo.mesh.setTransfiniteCurve(L1,nPoints=p.Nx_far_wake,coef=p.y_outer_horizontal_progression)
+L2 = gmsh.model.geo.addLine(outer_top_far_wake_1, outer_top_far_wake_2)
+gmsh.model.geo.mesh.setTransfiniteCurve(L2,nPoints=p.nz_mid)
+L3 = gmsh.model.geo.addLine(outer_top_far_wake_2, outer_top_far_wake_3)
+gmsh.model.geo.mesh.setTransfiniteCurve(L3,nPoints=p.Nx_far_wake, coef=1/p.y_outer_horizontal_progression)
+L4 = gmsh.model.geo.addLine(outer_top_far_wake_3, outer_top_far_wake_0)
+gmsh.model.geo.mesh.setTransfiniteCurve(L4,nPoints=p.nz_mid)
+gmsh.model.geo.synchronize()
+
+upper_top_surf_pts = gmsh.model.getBoundary([(2, far_wake_top_surf)], oriented=False, recursive=True)
+upper_top_surf_pts = [tag for dim, tag in upper_top_surf_pts]
+
+
+line = gmsh.model.geo.addLine(upper_top_surf_pts[0],outer_top_far_wake_3 )
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[1],outer_top_far_wake_0)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[2],outer_top_far_wake_2)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[3],outer_top_far_wake_1)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+outer_top_surf = create_surface_from_points([outer_top_far_wake_0,outer_top_far_wake_1,outer_top_far_wake_2,outer_top_far_wake_3])
+# _ = create_surface_from_points([outer_top_far_wake_0,outer_top_far_wake_3,upper_top_surf_pts[0],upper_top_surf_pts[1]])
+_ = create_surface_from_points([outer_top_far_wake_3,outer_top_far_wake_2,upper_top_surf_pts[2],upper_top_surf_pts[0]])
+_ = create_surface_from_points([outer_top_far_wake_2,outer_top_far_wake_1,upper_top_surf_pts[3],upper_top_surf_pts[2]])
+_ = create_surface_from_points([outer_top_far_wake_1,outer_top_far_wake_0,upper_top_surf_pts[1],upper_top_surf_pts[3]])
+
+_ = create_volumes_from_surface_pairs([outer_top_surf],[far_wake_top_surf])
+gmsh.model.geo.synchronize()
+
+# -----------------------------------------------------------------------
+# Top far wake
+# -----------------------------------------------------------------------
+
+outer_bot_far_wake_0 = outer_bot_near_wake_1
+outer_bot_far_wake_1 = gmsh.model.geo.addPoint(p.Lx,-p.Ly,0)
+outer_bot_far_wake_2 = gmsh.model.geo.addPoint(p.Lx,-p.Ly,p.W)
+outer_bot_far_wake_3 = outer_bot_near_wake_2
+L1 = gmsh.model.geo.addLine(outer_bot_far_wake_0, outer_bot_far_wake_1)
+gmsh.model.geo.mesh.setTransfiniteCurve(L1,nPoints=p.Nx_far_wake,coef=p.y_outer_horizontal_progression)
+L2 = gmsh.model.geo.addLine(outer_bot_far_wake_1, outer_bot_far_wake_2)
+gmsh.model.geo.mesh.setTransfiniteCurve(L2,nPoints=p.nz_mid)
+L3 = gmsh.model.geo.addLine(outer_bot_far_wake_2, outer_bot_far_wake_3)
+gmsh.model.geo.mesh.setTransfiniteCurve(L3,nPoints=p.Nx_far_wake, coef=1/p.y_outer_horizontal_progression)
+L4 = gmsh.model.geo.addLine(outer_bot_far_wake_3, outer_bot_far_wake_0)
+gmsh.model.geo.mesh.setTransfiniteCurve(L4,nPoints=p.nz_mid)
+gmsh.model.geo.synchronize()
+
+upper_top_surf_pts = gmsh.model.getBoundary([(2, far_wake_bottom_surf)], oriented=False, recursive=True)
+upper_top_surf_pts = [tag for dim, tag in upper_top_surf_pts]
+
+
+line = gmsh.model.geo.addLine(upper_top_surf_pts[0],outer_bot_far_wake_3 )
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[1],outer_bot_far_wake_0)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[2],outer_bot_far_wake_2)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+line = gmsh.model.geo.addLine(upper_top_surf_pts[3],outer_bot_far_wake_1)
+gmsh.model.geo.mesh.setTransfiniteCurve(line, p.Ny_outer,
+                                    meshType="Progression",
+                                    coef=p.y_outer_vertical_progression)
+outer_top_surf = create_surface_from_points([outer_bot_far_wake_0,outer_bot_far_wake_1,outer_bot_far_wake_2,outer_bot_far_wake_3])
+# _ = create_surface_from_points([outer_bot_far_wake_0,outer_bot_far_wake_3,upper_top_surf_pts[0],upper_top_surf_pts[1]])
+_ = create_surface_from_points([outer_bot_far_wake_3,outer_bot_far_wake_2,upper_top_surf_pts[2],upper_top_surf_pts[0]])
+_ = create_surface_from_points([outer_bot_far_wake_2,outer_bot_far_wake_1,upper_top_surf_pts[3],upper_top_surf_pts[2]])
+_ = create_surface_from_points([outer_bot_far_wake_1,outer_bot_far_wake_0,upper_top_surf_pts[1],upper_top_surf_pts[3]])
+
+_ = create_volumes_from_surface_pairs([outer_top_surf],[far_wake_bottom_surf])
+gmsh.model.geo.synchronize()
 
 # -----------------------------------------------------------------------
 #Add Physical Groups
@@ -831,18 +1244,17 @@ gmsh.model.addPhysicalGroup(3, fluid_tags, name="fluid")
 # -----------------------------------------------------------------------
 
 gmsh.model.geo.synchronize()
-
+gmsh.model.geo.removeAllDuplicates()
 # Generate 3D mesh
 gmsh.option.setNumber("Mesh.ElementOrder", 2)      # Quadratic elements
 gmsh.option.setNumber("Mesh.MshFileVersion", 2.2) 
 
 gmsh.model.mesh.generate(3)
 
-gmsh.write(os.path.join(script_dir, "nested_z_3D_blocks_geo.cgns"))
-gmsh.write(os.path.join(script_dir, "nested_z_3D_blocks_geo.msh"))
-
 # Launch GUI (optional - comment out if running in batch mode)
 if '-nopopup' not in sys.argv:
     gmsh.fltk.run()
 
+gmsh.write(os.path.join(script_dir, "nested_z_3D_blocks_geo.cgns"))
+gmsh.write(os.path.join(script_dir, "nested_z_3D_blocks_geo.msh"))
 gmsh.finalize()
