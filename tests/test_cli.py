@@ -2,6 +2,9 @@
 
 import contextlib
 import io
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -44,3 +47,15 @@ class CliTests(unittest.TestCase):
                      ["--mode", "3d-extrude", "--z-elements", "0"]):
             with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 self.capture(args)
+
+    def test_config_mode_order_and_optional_images(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.json"
+            path.write_text(json.dumps({"mode": "2d", "order": 1, "airfoil": "0012"}))
+            result = self.capture(["--config", str(path), "--no-images"])
+            self.assertEqual((result["mode"], result["order"]), ("2d", 1))
+            self.assertEqual(result["params"].airfoil, "0012")
+            self.assertFalse(result["images"])
+            result = self.capture(["--config", str(path), "--mode", "3d-extrude", "--order", "2"])
+            self.assertEqual((result["mode"], result["order"]), ("3d-extrude", 2))
+            self.assertTrue(result["images"])

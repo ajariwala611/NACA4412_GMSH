@@ -9,7 +9,7 @@ from .config import Params
 
 def main(generator=None):
     parser = argparse.ArgumentParser(description="Generate a NACA four-digit XY grid or 3D mesh.")
-    parser.add_argument("--mode", choices=("2d", "3d-extrude", "3d-nested"), default="3d-nested")
+    parser.add_argument("--mode", choices=("2d", "3d-extrude", "3d-nested"))
     parser.add_argument("--z-elements", type=int, help="Uniform spanwise elements for 3d-extrude (default: 25)")
     parser.add_argument("--z-mid-elements", type=int, help="Elements in the middle Z segment for 3d-nested")
     parser.add_argument("--z-side-elements", type=int, help="Elements in each side Z segment for 3d-nested")
@@ -25,13 +25,12 @@ def main(generator=None):
     parser.add_argument("--domain-y", type=float, help="Outer Y extent (top/bottom at +/- this value)")
     parser.add_argument("--output-dir", type=Path, help="Output directory (default: generator directory)")
     parser.add_argument("--prefix", help="Output filename prefix (default: airfoil and mode)")
-    parser.add_argument("--order", type=int, choices=(1, 2), default=2)
+    parser.add_argument("--order", type=int, choices=(1, 2))
+    parser.add_argument("--no-images", action="store_true", help="Skip PNG exports")
+    parser.add_argument("--image-dir", type=Path, help="PNG directory (default: output-dir/images)")
+    parser.add_argument("--image-dpi", type=int, default=160, help="PNG resolution (default: 160)")
     parser.add_argument("-nopopup", "--no-gui", action="store_true", help="Run without opening the Gmsh GUI")
     args = parser.parse_args()
-    if args.z_elements is not None and args.mode != "3d-extrude":
-        parser.error("--z-elements applies only to --mode 3d-extrude")
-    if (args.z_mid_elements is not None or args.z_side_elements is not None) and args.mode != "3d-nested":
-        parser.error("--z-mid-elements and --z-side-elements apply only to --mode 3d-nested")
     values = {}
     if args.config:
         try:
@@ -40,6 +39,18 @@ def main(generator=None):
                 raise ValueError("configuration must be a JSON object")
         except (OSError, ValueError) as exc:
             parser.error(str(exc))
+    config_mode = values.pop("mode", "3d-nested")
+    config_order = values.pop("order", 2)
+    mode = args.mode if args.mode is not None else config_mode
+    order = args.order if args.order is not None else config_order
+    if mode not in ("2d", "3d-extrude", "3d-nested") or order not in (1, 2):
+        parser.error("configuration mode/order is invalid")
+    if args.image_dpi < 50:
+        parser.error("--image-dpi must be >= 50")
+    if args.z_elements is not None and mode != "3d-extrude":
+        parser.error("--z-elements applies only to --mode 3d-extrude")
+    if (args.z_mid_elements is not None or args.z_side_elements is not None) and mode != "3d-nested":
+        parser.error("--z-mid-elements and --z-side-elements apply only to --mode 3d-nested")
     for flag, field in (("airfoil", "airfoil"), ("span", "W"), ("z_elements", "z_elements"),
                         ("domain_x", "Lx"), ("domain_y", "Ly")):
         if getattr(args, flag) is not None:
@@ -60,8 +71,9 @@ def main(generator=None):
     if generator is None:
         from generate_mesh import generate_mesh
         generator = generate_mesh
-    paths = generator(params, mode=args.mode, output_dir=args.output_dir, prefix=args.prefix,
-                      order=args.order, gui=not args.no_gui)
+    paths = generator(params, mode=mode, output_dir=args.output_dir, prefix=args.prefix,
+                      order=order, gui=not args.no_gui, images=not args.no_images,
+                      image_dir=args.image_dir, image_dpi=args.image_dpi)
     for kind, path in paths.items():
         print(f"{kind}: {path}")
 

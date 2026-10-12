@@ -66,7 +66,7 @@ class NestedMeshTests(unittest.TestCase):
                                     Ny_outer=6, Nx_far_wake=8, Nx_near_wake=8)
                     with patch.object(gmsh, "initialize", initialize_quietly), patch.object(
                             generator, "write_mesh_quality_report", check_mesh):
-                        paths = generator.generate_nested(params, output_dir=out, prefix=code, order=1)
+                        paths = generator.generate_nested(params, output_dir=out, prefix=code, order=1, images=False)
                     self.assertFalse(gmsh.isInitialized())
                     self.assertTrue(all(p.is_file() for p in paths.values()))
 

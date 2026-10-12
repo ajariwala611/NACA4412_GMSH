@@ -20,7 +20,7 @@ overrides. Nested 3D remains the default mode.
 
 ## Running the current workflow
 
-The generator requires Python, `gmsh`, and `numpy`. The converter additionally
+The generator requires Python, `gmsh`, `numpy`, and `matplotlib` for PNG export. The converter additionally
 requires `meshio` and `netCDF4`. Validated versions are pinned in `requirements.txt`.
 Install them into your chosen Python environment with `python -m pip install -r requirements.txt`.
 
@@ -122,16 +122,25 @@ their defaults.
 Changing the current 3D generator to `mesh.generate(2)` is not a planar-grid
 implementation: it would mesh surfaces of the 3D geometry.
 
-### Planned grid images
+### Grid images
 
-Each mesh mode will save PNG previews in an `images/` subfolder beside its mesh
+Each mesh mode saves PNG previews in an `images/` subfolder beside its mesh
 output, with filenames identifying the airfoil and mode:
 
 - **2D:** full domain and airfoil close-up.
-- **3D extrusion:** perspective view and spanwise cross-section.
-- **3D nested:** perspective view and cross-sections showing the spanwise blocks.
+- **3D extrusion:** XY domain/close-up, airfoil perspective, and YZ block section.
+- **3D nested:** XY domain/close-up, airfoil perspective, and YZ section showing the spanwise blocks.
 
-PNG export is a planned feature and is not yet implemented.
+Rendering uses the actual generated surface mesh and works without the Gmsh
+GUI. Quadratic edges include their middle nodes. The 3D display aspect expands
+the span for readability, as labeled on the figure; coordinates are unchanged.
+Use `--no-images` to skip rendering, `--image-dir PATH` to choose a PNG folder,
+and `--image-dpi N` to set resolution (default: 160). Python callers can pass
+`images=False`, `image_dir=...`, or `image_dpi=...` to the generator.
+
+See [examples/README.md](examples/README.md) for the three configurations,
+committed PNGs, and regeneration commands. Configurations may include `mode`
+and `order`; command-line overrides take precedence.
 
 ## Parameter conventions for the refactor
 

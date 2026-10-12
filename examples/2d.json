@@ -1,0 +1,14 @@
+{
+  "mode": "2d",
+  "order": 2,
+  "airfoil": "4412",
+  "ny": 6,
+  "nz_mid": 3,
+  "nz_left_right": 4,
+  "upper_surface": 31,
+  "lower_surface": 16,
+  "nose_surface": 21,
+  "Ny_outer": 6,
+  "Nx_far_wake": 8,
+  "Nx_near_wake": 8
+}

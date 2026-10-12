@@ -82,7 +82,7 @@ class MeshModeTests(unittest.TestCase):
                                 gmsh, "initialize", quiet), patch.object(generator, "write_mesh_quality_report", check), patch.object(
                                 generator, "build_nested_geometry", side_effect=AssertionError("planar modes must not build nested volumes")):
                             generator.generate_mesh(params, mode=mode, order=order,
-                                                    output_dir=out, prefix=f"{code}_{mode}_{order}")
+                                                    output_dir=out, prefix=f"{code}_{mode}_{order}", images=False)
                         self.assertFalse(gmsh.isInitialized())
 
 

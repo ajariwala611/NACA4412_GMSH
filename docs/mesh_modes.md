@@ -67,7 +67,8 @@ not 2D grids.
 
 ## Remaining work
 
-Automatic PNG previews remain planned. Further work can separate mode-specific
+Automatic PNG previews are now implemented in `naca_mesh/previews.py`; see
+[the example gallery](../examples/README.md). Further work can separate mode-specific
 configuration validation, support non-unit chords/open trailing edges, and
 optimize measured costs. Each new airfoil and parameter combination still needs
 quality checks; these results do not prove validity for all four-digit profiles.

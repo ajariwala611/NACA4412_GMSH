@@ -1132,7 +1132,8 @@ def build_nested_geometry(p):
     gmsh.model.geo.removeAllDuplicates()
 
 
-def generate_mesh(p=None, *, mode="3d-nested", output_dir=None, prefix=None, order=2, gui=False):
+def generate_mesh(p=None, *, mode="3d-nested", output_dir=None, prefix=None, order=2, gui=False,
+                  images=True, image_dir=None, image_dpi=160):
     """Generate an XY grid, uniform-Z extrusion, or nested spanwise mesh.
 
     This entry point owns the Gmsh session and always finalizes it. Geometry
@@ -1146,6 +1147,8 @@ def generate_mesh(p=None, *, mode="3d-nested", output_dir=None, prefix=None, ord
     prefix = prefix or f"naca{p.airfoil}_{mode}"
     if order not in (1, 2):
         raise ValueError("order must be 1 or 2")
+    if type(image_dpi) is not int or image_dpi < 50:
+        raise ValueError("image_dpi must be an integer >= 50")
     if not prefix or Path(prefix).name != prefix or prefix in (".", ".."):
         raise ValueError("prefix must be a filename without directory components")
     if gmsh.isInitialized():
@@ -1180,19 +1183,25 @@ def generate_mesh(p=None, *, mode="3d-nested", output_dir=None, prefix=None, ord
         gmsh.write(str(output_dir / f"{prefix}.cgns"))
 
 
-        if gui:
-            gmsh.fltk.run()
-        return {"msh": output_dir / f"{prefix}.msh",
+        paths = {"msh": output_dir / f"{prefix}.msh",
                 "cgns": output_dir / f"{prefix}.cgns",
                 "quality": output_dir / f"{prefix}_quality_order{order}.txt"}
+        if images:
+            from naca_mesh.previews import write_previews
+            paths.update(write_previews(p, mode, output_dir / "images" if image_dir is None else image_dir,
+                                        prefix, dpi=image_dpi))
+        if gui:
+            gmsh.fltk.run()
+        return paths
     finally:
         gmsh.finalize()
 
 
-def generate_nested(p=None, *, output_dir=None, prefix="nested_z_3D_blocks_geo", order=2, gui=False):
+def generate_nested(p=None, *, output_dir=None, prefix="nested_z_3D_blocks_geo", order=2, gui=False,
+                    images=True, image_dir=None, image_dpi=160):
     """Compatibility entry point preserving the original nested output names."""
     return generate_mesh(p, mode="3d-nested", output_dir=output_dir, prefix=prefix,
-                         order=order, gui=gui)
+                         order=order, gui=gui, images=images, image_dir=image_dir, image_dpi=image_dpi)
 
 
 if __name__ == "__main__":
