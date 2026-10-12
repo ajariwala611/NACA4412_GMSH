@@ -1,19 +1,19 @@
 # NACA airfoil meshing with Gmsh
 
-This repository currently contains a NACA four-digit generator for a structured 3D
-external-flow mesh with nested blocks across the span, and a Gmsh-to-Exodus
-converter for use with exo2nek.
+This repository generates structured external-flow grids around NACA four-digit
+airfoils: a full planar XY grid, its uniform-Z extrusion, or the original nested
+spanwise 3D grid. It also includes a Gmsh-to-Exodus converter for exo2nek.
 
-The nested generator accepts an airfoil code, JSON configuration, and command-line
-overrides. Planar 2D and simple spanwise extrusion remain planned modes.
+The generator accepts an airfoil code, JSON configuration, and command-line
+overrides. Nested 3D remains the default mode.
 
 ## Current files
 
 | Path | Purpose |
 | --- | --- |
-| `nested_z_3D_blocks_geo_normal.py` | Active nested 3D generator with surface-normal offsets, wake grading, physical groups, and mesh-quality reporting. |
+| `generate_mesh.py` | Mode selection and original nested 3D geometry assembly, with physical groups and quality reporting. |
 | `gmsh_to_exo_exo2nek.py` | Converts 3D Gmsh volume meshes to Exodus and reconstructs boundary side sets for exo2nek. |
-| `naca_mesh/` | Shared airfoil geometry, configuration, grading, and command-line controls. |
+| `naca_mesh/` | Shared spline geometry, direct XY block builder, simple extrusion, configuration, grading, and command-line controls. |
 | `examples/nested_coarse.json` | Small nested-grid configuration for quick checks; JSON counts are legacy node counts. |
 | `tests/` | Numerical checks and small end-to-end meshes with conformity, boundary, and quality checks. |
 | `legacy/` | Older generators and technique experiments, retained as references. See [legacy/README.md](legacy/README.md). |
@@ -27,23 +27,23 @@ Install them into your chosen Python environment with `python -m pip install -r 
 Run with the preserved default parameters:
 
 ```sh
-python nested_z_3D_blocks_geo_normal.py -nopopup
-python gmsh_to_exo_exo2nek.py nested_z_3D_blocks_geo.msh nested_z_3D_blocks_geo.exo
+python generate_mesh.py -nopopup
+python gmsh_to_exo_exo2nek.py naca4412_3d-nested.msh naca4412_3d-nested.exo
 ```
 
 Without `-nopopup`, the generator opens the Gmsh GUI. It currently writes mesh
 files and a quality report beside the script:
 
-- `nested_z_3D_blocks_geo.msh`
-- `nested_z_3D_blocks_geo.cgns`
-- `nested_z_3D_blocks_geo_quality_order2.txt`
+- `naca4412_3d-nested.msh`
+- `naca4412_3d-nested.cgns`
+- `naca4412_3d-nested_quality_order2.txt`
 
 The converter creates an Exodus file; running exo2nek is a separate step.
 
 For a quick coarse mesh with first-order elements and a separate output folder:
 
 ```sh
-python nested_z_3D_blocks_geo_normal.py --no-gui \
+python generate_mesh.py --no-gui \
   --config examples/nested_coarse.json --airfoil 0012 \
   --upper-elements 30 --lower-elements 15 --nose-elements 20 \
   --order 1 --output-dir meshes --prefix naca0012
@@ -57,7 +57,8 @@ take precedence over JSON. A full-resolution JSON can omit any default field;
 default values live in `naca_mesh/config.py`.
 
 `--span` sets the total Z extent, `--domain-x` sets the outlet X coordinate, and
-`--domain-y` sets the outer Y extent. All current topology lengths use a unit
+`--domain-y` sets the outer Y extent. `--wall-elements` and `--outer-elements`
+control the inner and outer wall-normal block resolution. All current topology lengths use a unit
 chord. Non-unit chord and open trailing edges are rejected explicitly until
 the geometry/topology has been adapted for them. The existing nose offset also
 requires `0.05 < h_in < H < Ly`. Invalid configurations are checked before
@@ -73,26 +74,50 @@ For Python callers:
 
 ```python
 from naca_mesh import Params
-from nested_z_3D_blocks_geo_normal import generate_nested
+from generate_mesh import generate_mesh
 
-paths = generate_nested(Params(airfoil="4412"), output_dir="meshes", gui=False)
+paths = generate_mesh(Params(airfoil="4412", z_elements=32), mode="3d-extrude",
+                      output_dir="meshes", gui=False)
 ```
 
-Importing the generator creates no mesh. `generate_nested` owns and finalizes
+Importing the generator creates no mesh. `generate_mesh` owns and finalizes
 its Gmsh session, including when geometry generation or export raises an error.
+`generate_nested` remains available as a compatibility entry point, retaining
+the earlier `nested_z_3D_blocks_geo` output prefix.
 
-## Planned mesh modes
+## Mesh modes
 
 | Mode | Intended behavior | Status |
 | --- | --- | --- |
-| `2d` | Build a structured planar external-flow grid, with explicit element counts over the nose, upper surface, and lower surface. | Planned |
-| `3d-extrude` | Extrude the same planar block grid along Z to create hexahedra. | Planned |
-| `3d-nested` | Build conforming blocks with nested resolution across the span. This will remain the default mode. | Implemented as a callable generator with four-digit geometry and configuration; unified mode selection planned. |
+| `2d` | Build a full external-flow grid in XY at Z=0, with nose/upper/lower surface element controls. | Implemented directly as 14 planar blocks; no volumes are constructed. |
+| `3d-extrude` | Extrude that same XY block grid along Z into uniform hexahedral layers. | Implemented; `--z-elements N` creates N layers (N+1 corner-node planes). |
+| `3d-nested` | Use the original conforming nested spanwise block construction. | Implemented and remains the default. |
 
-All modes should share the airfoil definition, domain dimensions, wall-normal
+```sh
+# Full XY grid, using a small configuration for a quick run
+python generate_mesh.py --mode 2d --config examples/nested_coarse.json --no-gui
+
+# Same XY grid, with 32 elements along the span
+python generate_mesh.py --mode 3d-extrude --z-elements 32 --span 0.1 \
+  --config examples/nested_coarse.json --no-gui
+
+# Original nested topology
+python generate_mesh.py --mode 3d-nested --config examples/nested_coarse.json --no-gui
+```
+
+The 2D builder uses three airfoil splines, the normal-offset inner nose spline,
+the outer inlet semicircle, upper/lower inner and outer blocks, and near/far wake
+blocks. Simple extrusion uses the same planar surfaces in a single shared
+extrusion operation. The nested builder retains the original geometry sequence.
+See [docs/mesh_modes.md](docs/mesh_modes.md) for the organization and checks.
+
+All modes share the airfoil definition, domain dimensions, wall-normal
 grading, nose split, and wake controls. Span and spanwise resolution should
-apply only to the 3D modes. The nested mode may require additional topology
-constraints and parameters beyond those used for simple extrusion.
+apply only to the 3D modes. For nested mode, `--z-mid-elements` and
+`--z-side-elements` override the original middle and side Z-segment node counts.
+`--z-elements` applies only to simple extrusion. The current shared configuration
+still validates legacy nested fields even for 2D; unused values can be left at
+their defaults.
 
 Changing the current 3D generator to `mesh.generate(2)` is not a planar-grid
 implementation: it would mesh surfaces of the 3D geometry.
@@ -133,12 +158,12 @@ PNG export is a planned feature and is not yet implemented.
 2. **Completed:** extract configuration, four-digit airfoil geometry, and grading
    utilities, remove duplicate hard-coded airfoil definitions, and introduce a
    callable entry point and command-line controls.
-3. Build a shared planar block topology with the intended nose, upper, lower,
-   wall-normal, and wake controls. Verify a 2D mesh before adding extrusion.
-4. Add simple Z extrusion of that planar topology, preserving conformity and
-   propagating physical boundary groups.
-5. Integrate the existing nested 3D construction behind the same configuration
-   and mode-selection interface. Check block interfaces and mesh quality.
+3. **Completed:** build the direct planar XY block topology with nose, upper,
+   lower, wall-normal, and wake controls; verify first- and second-order meshes.
+4. **Completed:** add simple Z extrusion, preserving conformity and physical
+   boundary groups, with explicit spanwise element counts.
+5. **Completed:** integrate the existing nested construction behind the shared
+   configuration and mode interface; retain its original geometry sequence.
 6. Add example configurations, a command-line interface, dependency metadata,
    and documented output/conversion steps. Optimize measured bottlenecks after
    the meshes are validated.

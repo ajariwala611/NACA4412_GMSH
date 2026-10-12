@@ -13,12 +13,12 @@ import numpy as np
 class NestedMeshTests(unittest.TestCase):
     def test_import_has_no_mesh_side_effects(self):
         import gmsh
-        import nested_z_3D_blocks_geo_normal
+        import generate_mesh
         self.assertFalse(gmsh.isInitialized())
 
     def test_coarse_airfoils_have_conforming_hexes_and_complete_boundaries(self):
         import gmsh
-        import nested_z_3D_blocks_geo_normal as generator
+        import generate_mesh as generator
         from naca_mesh import Params
 
         original_initialize = gmsh.initialize

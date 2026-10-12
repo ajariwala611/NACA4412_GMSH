@@ -19,6 +19,7 @@ class Params:
     ny: int = 22
     nz_mid: int = 4
     nz_left_right: int = 12
+    z_elements: int = 25    # uniform-Z layers for simple extrusion only
     upper_surface: int = 275
     lower_surface: int = 50
     nose_surface: int = 150
@@ -86,6 +87,8 @@ class Params:
 
     def validate(self):
         decode_airfoil(self.airfoil)
+        if type(self.z_elements) is not int or self.z_elements < 1:
+            raise ValueError("z_elements must be a positive integer")
         if self.c != 1.0:
             raise ValueError("nested topology currently requires c=1; chord scaling needs a separate refactor")
         if self.closed_TE is not True:

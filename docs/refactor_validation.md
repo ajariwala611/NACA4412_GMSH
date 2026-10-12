@@ -1,7 +1,7 @@
 # Nested-generator refactor validation
 
-The reference was a copy of the working `nested_z_3D_blocks_geo_normal.py`
-before this refactor, including the user's existing uncommitted geometry and
+The reference was a copy of the working nested generator before the refactor
+and filename change, including the user's existing uncommitted geometry and
 quality-report changes. It was not the older committed version.
 
 ## Full-resolution default NACA 4412
@@ -73,10 +73,11 @@ as part of this check.
 
 ```sh
 python -m unittest discover -s tests -v
-python nested_z_3D_blocks_geo_normal.py --no-gui
+python generate_mesh.py --no-gui
 ```
 
-The tests currently contain 12 test methods, including integration subcases.
+The initial refactor validation used 12 test methods, including integration
+subcases. The suite now also includes mode-selection and planar/extrusion checks.
 Validated library versions are recorded in `requirements.txt`. Generated
 comparison meshes were placed outside the repository; no multi-million-node
 mesh is included in source control.
@@ -85,5 +86,5 @@ The nested topology still assumes a unit chord, a closed trailing edge, and
 the original nose-offset construction. Configuration validation rejects known
 unsupported settings. It does not prove validity for every four-digit profile
 or resolution. New profiles and parameter combinations still require mesh
-quality and boundary checks. Planar 2D and simple Z extrusion are not implemented
-by this refactor.
+quality and boundary checks. The subsequent planar/extrusion implementation and
+its validation are described in [mesh_modes.md](mesh_modes.md).
