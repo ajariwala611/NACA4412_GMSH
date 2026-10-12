@@ -1,2 +1,8 @@
 *.cgns
 *.msh
+*.exo
+*.re2
+*_quality_order*.txt
+__pycache__/
+._*
+.DS_Store

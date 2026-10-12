@@ -1,0 +1,5 @@
+# Versions used for the recorded refactor validation.
+gmsh==4.15.1
+numpy==2.4.6
+meshio==5.3.5
+netCDF4==1.7.4
